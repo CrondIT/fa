@@ -20,9 +20,10 @@ from starlette.responses import JSONResponse
 
 load_dotenv()
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
-# Логин и пароль для доступа к странице
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+ALLOWED_IPS = os.getenv("ALLOWED_IPS").split(",")
+VALID_TOKENS = os.getenv("VALID_TOKENS").split(",")
 
 
 class Variable(BaseModel):
@@ -74,16 +75,6 @@ class EnvironmentVariable(Base):
     value = Column(String, nullable=False)
 
 
-# Настройки
-# Список разрешённых IP
-ALLOWED_IPS = [
-    "127.0.0.1",
-    "192.168.0.100",
-    "::ffff:127.0.0.1",
-    "172.17.0.1",
-]
-# Список допустимых Bearer токенов
-VALID_TOKENS = ["my_difficult_bearer_key", "qwe"]
 # Создаем таблицы
 Base.metadata.create_all(bind=engine)
 
@@ -163,8 +154,6 @@ def decrypt_value(value: str) -> str:
     return fernet.decrypt(value.encode()).decode()
 
 
-# API Endpoints
-
 # Указываем папку, где будут храниться статические файлы (например, HTML)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
@@ -172,7 +161,7 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 # Основной маршрут, который будет отдавать index.html
 @app.get("/", response_class=HTMLResponse)
 async def read_index():
-    with open("app/static/index.html", "r") as f:
+    with open("app/static/index.html", "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
 
 
@@ -181,7 +170,7 @@ async def read_index():
 async def read_admin(
     credentials: HTTPBasicCredentials = Depends(authenticate)
 ):
-    with open("app/static/admin.html", "r") as f:
+    with open("app/static/admin.html", "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
 
 
