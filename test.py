@@ -15,4 +15,4 @@ print("Зашифровано:", encrypted)
 decrypted = fernet.decrypt(encrypted)
 print("Расшифровано:", decrypted.decode())
 
-print(Fernet.generate_key()) 
+print(Fernet.generate_key())

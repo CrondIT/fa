@@ -1,0 +1,128 @@
+from fastapi import FastAPI
+import httpx
+import uvicorn
+import asyncio
+import logging
+from global_state import MAX_API_TOKEN, MAX_BASE_URL
+from gigachat import gigachat
+
+app = FastAPI()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+logger.info(f"MAX_API_TOKEN: {'***' + MAX_API_TOKEN[-10:] if MAX_API_TOKEN else 'None'}")
+logger.info(f"MAX_BASE_URL: {MAX_BASE_URL}")
+
+
+
+# Marker для отслеживания прочитанных обновлений
+last_marker = None
+
+
+async def send_message(user_id: int, text: str):
+    """Функция отправки сообщения через API MAX"""
+    url = f"{MAX_BASE_URL}/messages"
+    headers = {
+        "Authorization": MAX_API_TOKEN,
+        "Content-Type": "application/json"
+        }
+    params = {"user_id": user_id}
+    payload = {"text": text}
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            url, headers=headers,
+            params=params,
+            json=payload
+            )
+        if response.status_code != 200:
+            logger.error(
+                f"Ошибка отправки: {response.status_code} — {response.text}"
+            )
+        return response.status_code
+
+
+async def get_updates(marker=None):
+    """Получение обновлений через Long Polling"""
+    global last_marker
+    url = f"{MAX_BASE_URL}/updates"
+    headers = {
+        "Authorization": MAX_API_TOKEN,
+        "Content-Type": "application/json"
+        }
+    params = {
+        "limit": 100,
+        "timeout": 30,  # время ожидания в секундах
+        "types": ["message_created"],  # фильтруем только сообщения
+    }
+    if marker is not None:
+        params["marker"] = marker
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            url, headers=headers, params=params, timeout=35
+            )
+        if response.status_code == 200:
+            data = response.json()
+            last_marker = data.get("marker")
+            return data.get("updates", [])
+        else:
+            logger.error(f"Ошибка получения обновл.: {response.status_code}")
+            return []
+
+
+async def poll_updates():
+    """Основной цикл Long Polling"""
+    global last_marker
+    logger.info("Запуск Long Polling...")
+    while True:
+        try:
+            updates = await get_updates(last_marker)
+            if updates:
+                logger.info(f"Получено обновлений: {len(updates)}")
+                for update in updates:
+                    if update.get("update_type") == "message_created":
+                        message = update.get("message", {})
+                        sender = message.get("sender", {})
+                        body = message.get("body", {})
+
+                        user_id = sender.get("user_id")
+                        user_text = body.get("text", "")
+
+                        if user_id and user_text:
+                            logger.info(
+                                f"Сообщение от {sender.get('name')}: {user_text}"
+                            )
+                            # Эхо-ответ
+
+                            answer = await gigachat.ask(user_text)
+
+                            await send_message(
+                                user_id,
+                                answer,
+                                )
+                        else:
+                            logger.warning(
+                                f"Пропущено: user_id={user_id}, text={user_text}"
+                            )
+        except Exception as e:
+            logger.error(f"Ошибка в цикле polling: {e}")
+            await asyncio.sleep(5)  # пауза при ошибке
+
+        await asyncio.sleep(1)  # небольшая пауза между запросами
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Запуск Long Polling при старте приложения"""
+    asyncio.create_task(poll_updates())
+
+
+@app.get("/")
+async def health_check():
+    """Проверка работоспособности"""
+    return {"status": "ok", "marker": last_marker}
+
+
+# if __name__ == "__main__":
+#    uvicorn.run(app, host="0.0.0.0", port=8000)
