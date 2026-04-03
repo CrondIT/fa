@@ -3,8 +3,9 @@ import httpx
 import uvicorn
 import asyncio
 import logging
-from global_state import MAX_API_TOKEN, MAX_BASE_URL
-from gigachat import gigachat
+from global_state import MAX_API_TOKEN, MAX_BASE_URL, GIGACHAT_API_KEY
+#from mygigachat import gigachat
+from gigachat import GigaChat
 
 app = FastAPI()
 logging.basicConfig(level=logging.INFO)
@@ -14,9 +15,15 @@ logger.info(f"MAX_API_TOKEN: {'***' + MAX_API_TOKEN[-10:] if MAX_API_TOKEN else 
 logger.info(f"MAX_BASE_URL: {MAX_BASE_URL}")
 
 
-
 # Marker для отслеживания прочитанных обновлений
 last_marker = None
+
+giga = GigaChat(
+   credentials=GIGACHAT_API_KEY,
+   scope="GIGACHAT_API_PERS",
+   model="GigaChat",
+   ca_bundle_file="russian_trusted_root_ca_pem.crt"
+)
 
 
 async def send_message(user_id: int, text: str):
@@ -95,11 +102,12 @@ async def poll_updates():
                             )
                             # Эхо-ответ
 
-                            answer = await gigachat.ask(user_text)
+                            # answer = await gigachat.ask(user_text)
+                            answer = giga.chat(user_text)
 
                             await send_message(
                                 user_id,
-                                answer,
+                                answer.choices[0].message.content,
                                 )
                         else:
                             logger.warning(

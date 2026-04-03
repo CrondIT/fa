@@ -35,10 +35,14 @@ class GigaChatClient:
         if self._access_token:
             return self._access_token
 
-        logger.info(f"GigaChat: client_id={'***' + self.client_id[-5:] if self.client_id else 'None'}, secret={'***' + self.client_secret[-5:] if self.client_secret else 'None'}")
+        logger.info(
+            f"GigaChat: client_id={'***' + self.client_id[-5:] if self.client_id else 'None'}, secret={'***' + self.client_secret[-5:] if self.client_secret else 'None'}"
+        )
 
         if not self.client_id or not self.client_secret:
-            raise RuntimeError("GigaChat: не заданы GIGACHAT_CLIENT_ID или GIGACHAT_CLIENT_SECRET")
+            raise RuntimeError(
+                "GigaChat: не заданы GIGACHAT_CLIENT_ID или GIGACHAT_CLIENT_SECRET"
+            )
 
         auth_string = f"{self.client_id}:{self.client_secret}"
         auth_b64 = base64.b64encode(auth_string.encode()).decode()
