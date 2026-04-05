@@ -17,3 +17,6 @@ uvicorn bot:app --reload
      14     {"role": "user", "content": "Как дела?"},
      15 ]
      16 answer = await gigachat.ask_with_history(messages)
+
+
+     https://github.com/zhanymkanov/fastapi-best-practices
