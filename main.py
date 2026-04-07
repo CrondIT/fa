@@ -4,7 +4,6 @@ from pydantic import BaseModel
 from typing import Annotated
 
 
-
 class Item(BaseModel):
     name: str
     description: str | None = None
