@@ -1,0 +1,211 @@
+import os
+from datetime import datetime
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, Column, Integer, String, BigInteger, func, select
+from sqlalchemy.ext.declarative import DeclarativeBase
+from sqlalchemy.orm import sessionmaker, Session
+
+# Загрузить переменные из файла .env
+load_dotenv()
+
+
+# Инициализация базы данных
+class Base(DeclarativeBase):
+    # Пустой класс для наследования, чтобы не было ошибки при импорте Base
+    pass
+
+
+DATABASE_URL = "sqlite:///.maxbot.db"
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+db = SessionLocal
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(BigInteger, primary_key=True, index=True)
+    name = Column(String(50), default="user")
+    startdate = Column(datetime, server_default=func.now())
+    coindate = Column(datetime, server_default=func.now())
+    coins = Column(Integer, default=0)
+    giftcoins = Column(Integer, default=0)
+    note = Column(String(150), default="")
+
+
+def create_database():
+    try:
+        # создаем базу и таблицы если их не существует,
+        # ничего не делает если существуют
+        Base.metadata.create_all(bind=engine)
+
+        # Создание системного пользователя с userid=0, если он не существует
+        # 1. Пытаемся найти пользователя
+        result = db.execute(select(User).where(User.id == 0))
+        user = result.scalar_one_or_none()
+
+        if not user:
+            new_user = User(id=0, username="System")
+            db.add(new_user)
+            db.commit()
+            db.refresh(new_user)
+
+    except Exception as e:
+        print(f"Ошибка при создании базы или системного пользователя: {e}")
+
+
+def check_user(userid):
+    """
+    Проверяет, существует ли пользователь с заданным userid в таблице users.
+    Возвращает True, если пользователь найден, иначе False.
+    """
+    try:
+        with psycopg2.connect(
+            dbname=DBNAME,
+            user=DBUSER,
+            password=DBPASSWORD,
+            host=DBHOST,
+            port=DBPORT,
+        ) as conn:
+            with conn.cursor() as cur:
+                # Выполняем запрос: проверяем, есть ли запись с таким userid
+                cur.execute("SELECT 1 FROM users WHERE userid = %s LIMIT 1;", (userid,))
+                result = cur.fetchone()
+                # Если вернулась хотя бы одна строка — пользователь существует
+                return result is not None
+
+    except psycopg2.Error as e:
+        print(f"Ошибка при работе с PostgreSQL: {e}")
+        return False
+
+
+def create_user(userid, nickname, coins, giftcoins, note=None):
+    """
+    Создаёт пользователя в таблице users.
+    В поля startdate и giftdate заносится текущее время.
+    Возвращает True при успехе, False — при ошибке.
+    """
+    try:
+        with psycopg2.connect(
+            dbname=DBNAME,
+            user=DBUSER,
+            password=DBPASSWORD,
+            host=DBHOST,
+            port=DBPORT,
+        ) as conn:
+            with conn.cursor() as cur:
+                # Текущее время
+                now = datetime.now()
+
+                # Вставляем новую запись
+                cur.execute(
+                    """
+                    INSERT INTO users (
+                        userid, startdate, giftdate, coindate,
+                        nickname, coins, giftcoins, note
+                        )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (userid, now, now, now, nickname, coins, giftcoins, note),
+                )
+                conn.commit()
+                return True
+
+    except psycopg2.IntegrityError as e:
+        # Например, если пользователь с таким userid уже существует
+        print(f"Ошибка: пользователь с userid={userid} уже существует. {e}")
+        return False
+
+    except psycopg2.Error as e:
+        # Любая другая ошибка (проблемы с подключением, таблицей и т.д.)
+        print(f"Ошибка при работе с базой данных: {e}")
+        return False
+
+
+def get_user(userid):
+    """
+    Извлекает данные пользователя из таблицы users по userid.
+    Возвращает словарь с данными или None, если пользователь не найден.
+    """
+    if not check_user(userid):
+        create_user(userid, "User", 0, 1)
+    try:
+        with psycopg2.connect(
+            dbname=DBNAME,
+            user=DBUSER,
+            password=DBPASSWORD,
+            host=DBHOST,
+            port=DBPORT,
+        ) as conn:
+            with conn.cursor() as cur:
+                # Выполняем запрос
+                cur.execute(
+                    """
+                    SELECT id, userid, nickname, startdate, coindate,
+                           coins, giftdate, giftcoins, note
+                    FROM users
+                    WHERE userid = %s;
+                """,
+                    (userid,),
+                )
+
+                row = cur.fetchone()
+
+                # Если пользователь найден — возвращаем данные в виде словаря
+                if row:
+                    return {
+                        "id": row[0],
+                        "userid": row[1],
+                        "nickname": row[2],
+                        "startdate": row[3],
+                        "coindate": row[4],
+                        "coins": row[5],
+                        "giftdate": row[6],
+                        "giftcoins": row[7],
+                        "note": row[8],
+                    }
+                else:
+                    return None  # Пользователь не найден
+
+    except psycopg2.Error as e:
+        print(f"Ошибка при работе с базой данных: {e}")
+        return None
+
+
+def change_all_coins(userid: int, coins: int, giftcoins: int) -> bool:
+    """
+    Обновляет количество coins giftcoins
+    и устанавливает coindate в текущее время
+    для пользователя с заданным userid.
+    Возвращает True при успехе, False — при ошибке.
+    """
+    try:
+        with psycopg2.connect(
+            dbname=DBNAME,
+            user=DBUSER,
+            password=DBPASSWORD,
+            host=DBHOST,
+            port=DBPORT,
+        ) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET coins = coins + %s,
+                        giftcoins = giftcoins + %s,
+                        coindate = %s
+                    WHERE userid = %s;
+                """,
+                    (coins, giftcoins, datetime.now(), userid),
+                )
+
+                # Проверим, была ли обновлена хотя бы одна строка
+                if cur.rowcount == 0:
+                    return False
+
+                conn.commit()
+                return True
+
+    except psycopg2.Error as e:
+        print(f"Ошибка при обновлении данных: {e}")
+        return False
