@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 from dotenv import load_dotenv
 from sqlalchemy import (
     Integer,
@@ -6,6 +7,7 @@ from sqlalchemy import (
     BigInteger,
     DateTime,
     func,
+    select,
 )
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
@@ -22,7 +24,10 @@ from sqlalchemy.orm import (
 load_dotenv()
 
 
-# Инициализация асинхронной базы данных
+# ============================================================
+# Модель базы данных
+# ============================================================
+
 class Base(DeclarativeBase):
     pass
 
@@ -39,153 +44,259 @@ AsyncSessionLocal = async_sessionmaker(
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(String(50), default="user")
+    id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, index=True
+    )
+    name: Mapped[str] = mapped_column(
+        String(50), default="user"
+    )
     startdate: Mapped[datetime] = mapped_column(
-        DateTime,
-        server_default=func.now()
+        DateTime, server_default=func.now()
     )
     coindate: Mapped[datetime] = mapped_column(
-        DateTime,
-        server_default=func.now()
+        DateTime, server_default=func.now()
     )
-    coins: Mapped[int] = mapped_column(Integer, default=0)
-    giftcoins: Mapped[int] = mapped_column(Integer, default=0)
-    note: Mapped[str] = mapped_column(String(150), default="")
+    coins: Mapped[int] = mapped_column(
+        Integer, default=0
+    )
+    giftcoins: Mapped[int] = mapped_column(
+        Integer, default=0
+    )
+    note: Mapped[str] = mapped_column(
+        String(150), default=""
+    )
 
+    def __repr__(self) -> str:
+        return f"<User(id={self.id}, name='{self.name}', coins={self.coins})>"
+
+
+# ============================================================
+# Базовый репозиторий
+# ============================================================
+
+class BaseRepository:
+    """Базовый репозиторий — обёртка над AsyncSession."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def commit(self) -> None:
+        """Сохраняет изменения в базе."""
+        await self.session.commit()
+
+    async def refresh(self, instance) -> None:
+        """Обновляет атрибуты экземпляра из базы."""
+        await self.session.refresh(instance)
+
+
+# ============================================================
+# Репозиторий пользователей
+# ============================================================
+
+class UserRepository(BaseRepository):
+    """Репозиторий для работы с моделью User."""
+
+    # ---------- чтение ----------
+
+    async def get_by_id(self, userid: int) -> Optional[User]:
+        """Возвращает пользователя по id или None."""
+        result = await self.session.execute(
+            select(User).where(User.id == userid)
+        )
+        return result.scalar_one_or_none()
+
+    async def exists(self, userid: int) -> bool:
+        """Проверяет, существует ли пользователь с данным userid."""
+        user = await self.get_by_id(userid)
+        return user is not None
+
+    async def get_or_create(
+        self,
+        userid: int,
+        nickname: str = "User",
+        coins: int = 0,
+        giftcoins: int = 0,
+        note: str = "",
+    ) -> User:
+        """
+        Возвращает существующего пользователя или создаёт нового.
+        Всегда возвращает объект User.
+        """
+        user = await self.get_by_id(userid)
+        if user:
+            return user
+
+        user = User(
+            id=userid,
+            name=nickname,
+            startdate=datetime.now(),
+            coindate=datetime.now(),
+            coins=coins,
+            giftcoins=giftcoins,
+            note=note,
+        )
+        self.session.add(user)
+        await self.session.commit()
+        await self.session.refresh(user)
+        return user
+
+    # ---------- создание ----------
+
+    async def create(
+        self,
+        userid: int,
+        nickname: str,
+        coins: int = 0,
+        giftcoins: int = 0,
+        note: str = "",
+    ) -> bool:
+        """
+        Создаёт нового пользователя.
+        Возвращает True при успехе, False — если пользователь уже есть.
+        """
+        if await self.exists(userid):
+            print(f"Ошибка: пользователь с userid={userid} уже есть.")
+            return False
+
+        now = datetime.now()
+        user = User(
+            id=userid,
+            name=nickname,
+            startdate=now,
+            coindate=now,
+            coins=coins,
+            giftcoins=giftcoins,
+            note=note,
+        )
+        self.session.add(user)
+        await self.session.commit()
+        return True
+
+    # ---------- обновление ----------
+
+    async def add_coins(
+        self,
+        userid: int,
+        coins_delta: int = 0,
+        giftcoins_delta: int = 0,
+    ) -> bool:
+        """
+        Добавляет coins / giftcoins к текущему значению
+        и обновляет coindate.
+        Возвращает True при успехе, False — если пользователь не найден.
+        """
+        user = await self.get_by_id(userid)
+        if not user:
+            return False
+
+        user.coins += coins_delta
+        user.giftcoins += giftcoins_delta
+        user.coindate = datetime.now()
+
+        await self.session.commit()
+        return True
+
+    async def set_coins(
+        self,
+        userid: int,
+        coins: int,
+        giftcoins: int,
+    ) -> bool:
+        """
+        Устанавливает точные значения coins и giftcoins.
+        Возвращает True при успехе, False — если пользователь не найден.
+        """
+        user = await self.get_by_id(userid)
+        if not user:
+            return False
+
+        user.coins = coins
+        user.giftcoins = giftcoins
+        user.coindate = datetime.now()
+
+        await self.session.commit()
+        return True
+
+    # ---------- утилиты ----------
+
+    def to_dict(self, user: User) -> dict:
+        """Преобразует объект User в словарь."""
+        return {
+            "id": user.id,
+            "userid": user.id,
+            "nickname": user.name,
+            "startdate": user.startdate,
+            "coindate": user.coindate,
+            "coins": user.coins,
+            "giftcoins": user.giftcoins,
+            "note": user.note,
+        }
+
+
+# ============================================================
+# Фасад для обратной совместимости (функции-обёртки)
+# ============================================================
 
 async def create_database():
-    """Создает базу данных и таблицы, а также системного пользователя."""
+    """Создаёт таблицы и системного пользователя."""
     try:
-        # Создаем базу и таблицы если их не существует
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
 
-        # Создание системного пользователя с id=0, если он не существует
-        async with AsyncSessionLocal() as db:
-            from sqlalchemy import select
-            result = await db.execute(select(User).where(User.id == 0))
-            user = result.scalar_one_or_none()
-
+        async with AsyncSessionLocal() as session:
+            repo = UserRepository(session)
+            user = await repo.get_by_id(0)
             if not user:
-                new_user = User(id=0, name="System")
-                db.add(new_user)
-                await db.commit()
-                await db.refresh(new_user)
+                await repo.create(userid=0, nickname="System")
 
     except Exception as e:
         print(f"Ошибка при создании базы или системного пользователя: {e}")
 
 
 async def check_user(userid: int) -> bool:
-    """
-    Проверяет, существует ли пользователь с заданным userid в таблице users.
-    Возвращает True, если пользователь найден, иначе False.
-    """
-    try:
-        async with AsyncSessionLocal() as db:
-            from sqlalchemy import select
-            result = await db.execute(select(User).where(User.id == userid))
-            user = result.scalar_one_or_none()
-            return user is not None
-    except Exception as e:
-        print(f"Ошибка при проверке пользователя: {e}")
-        return False
+    """Проверяет существование пользователя."""
+    async with AsyncSessionLocal() as session:
+        repo = UserRepository(session)
+        return await repo.exists(userid)
 
 
 async def create_user(
-        userid: int,
-        nickname: str,
-        coins: int = 0,
-        giftcoins: int = 0,
-        note: str = None
+    userid: int,
+    nickname: str,
+    coins: int = 0,
+    giftcoins: int = 0,
+    note: str = None,
 ) -> bool:
-    """
-    Создаёт пользователя в таблице users.
-    В поля startdate и coindate заносится текущее время.
-    Возвращает True при успехе, False — при ошибке.
-    """
-    try:
-        async with AsyncSessionLocal() as db:
-            from sqlalchemy import select
-            # Проверяем, не существует ли уже пользователь
-            result = await db.execute(select(User).where(User.id == userid))
-            existing_user = result.scalar_one_or_none()
-            if existing_user:
-                print(f"Ошибка: пользователь с userid={userid} уже есть.")
-                return False
-
-            now = datetime.now()
-            new_user = User(
-                id=userid,
-                name=nickname,
-                startdate=now,
-                coindate=now,
-                coins=coins,
-                giftcoins=giftcoins,
-                note=note or ""
-            )
-            db.add(new_user)
-            await db.commit()
-            return True
-
-    except Exception as e:
-        print(f"Ошибка при создании пользователя: {e}")
-        return False
+    """Создаёт пользователя."""
+    async with AsyncSessionLocal() as session:
+        repo = UserRepository(session)
+        return await repo.create(
+            userid=userid,
+            nickname=nickname,
+            coins=coins,
+            giftcoins=giftcoins,
+            note=note or "",
+        )
 
 
-async def get_user(userid: int) -> dict | None:
-    """
-    Извлекает данные пользователя из таблицы users по userid.
-    Возвращает словарь с данными или None, если пользователь не найден.
-    """
-    try:
-        async with AsyncSessionLocal() as db:
-            from sqlalchemy import select
-            result = await db.execute(select(User).where(User.id == userid))
-            user = result.scalar_one_or_none()
-
-            if user:
-                return {
-                    "id": user.id,
-                    "userid": user.id,
-                    "nickname": user.name,
-                    "startdate": user.startdate,
-                    "coindate": user.coindate,
-                    "coins": user.coins,
-                    "giftcoins": user.giftcoins,
-                    "note": user.note,
-                }
-            return None
-
-    except Exception as e:
-        print(f"Ошибка при получении данных пользователя: {e}")
+async def get_user(userid: int) -> Optional[dict]:
+    """Возвращает данные пользователя в виде словаря."""
+    async with AsyncSessionLocal() as session:
+        repo = UserRepository(session)
+        user = await repo.get_by_id(userid)
+        if user:
+            return repo.to_dict(user)
         return None
 
 
-async def change_all_coins(userid: int, coins: int, giftcoins: int) -> bool:
-    """
-    Обновляет количество coins и giftcoins,
-    и устанавливает coindate в текущее время
-    для пользователя с заданным userid.
-    Возвращает True при успехе, False — при ошибке.
-    """
-    try:
-        async with AsyncSessionLocal() as db:
-            from sqlalchemy import select
-            result = await db.execute(select(User).where(User.id == userid))
-            user = result.scalar_one_or_none()
-
-            if not user:
-                return False
-
-            user.coins += coins
-            user.giftcoins += giftcoins
-            user.coindate = datetime.now()
-
-            await db.commit()
-            return True
-
-    except Exception as e:
-        print(f"Ошибка при обновлении данных: {e}")
-        return False
+async def change_all_coins(
+    userid: int, coins: int, giftcoins: int
+) -> bool:
+    """Добавляет coins и giftcoins к текущему значению."""
+    async with AsyncSessionLocal() as session:
+        repo = UserRepository(session)
+        return await repo.add_coins(
+            userid=userid,
+            coins_delta=coins,
+            giftcoins_delta=giftcoins,
+        )
